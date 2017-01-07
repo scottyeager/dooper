@@ -26,18 +26,18 @@ def send_osc(*args):
 
 # Map keyboard keys to loop numbers. Set commands for loop 0 ('master'), other loops have single button
 key_map = {'KEY_LEFTMETA': (0, 'record'),
-           'KEY_SPACE': (1,),
-           'KEY_RIGHTALT': (2,),
-           'KEY_RIGHTCTRL': (3,),
-           'KEY_RIGHT': (4,),
-           'KEY_KPENTER': (5,),
+           'KEY_SPACE': (1, 'record'),
+           'KEY_RIGHTALT': (2, 'record'),
+           'KEY_RIGHTCTRL': (3, 'record'),
+           'KEY_RIGHT': (4, 'record'),
+           'KEY_KPENTER': (5, 'record'),
 
-           'KEY_TAB': (0, 'mute'),
-           'KEY_E': (6,),
-           'KEY_U': (7,),
-           'KEY_LEFTBRACE': (8,),
-           'KEY_SYSRQ': (9,),
-           'KEY_KP8': (10,)}
+           'KEY_TAB': (0, 'overdub'),
+           'KEY_E': (1, 'overdub'),
+           'KEY_U': (2, 'overdub'),
+           'KEY_LEFTBRACE': (3, 'overdub'),
+           'KEY_SYSRQ': (4, 'overdub'),
+           'KEY_KP8': (5, 'overdub')}
 
 # Map sl's integer codes to loop states
 state_codes = {-1: 'unknown',
@@ -76,6 +76,20 @@ update_loop_states() #Do this once, because we don't know what the initial state
 
 loop_queues = [Queue() for i in range(loops)] #Individual queues for each loop's key presses
 
+def held(key_q):
+    pressed = time.time() #Record current time
+    held = pressed + hold_time #Calculate when user will have held for designated hold time
+    while 1:
+        delta = held - time.time() #Compute remaining hold time
+        if delta < 0: #This should probably not go negative, so just in case
+            delta = 0
+        try:
+            new_event = key_q.get(timeout=delta) #Wait to see if the user is holding
+            if new_event[1] == 'up': #Got the key up message, so user released
+                return False
+        except: #We got no up message and queue raised empty error
+            return True
+
 def master_catcher(key_q):
     """Receives keypresses sends messages as needed--for master loop"""
     while(1):
@@ -90,24 +104,11 @@ def catcher(key_q):
         state = update_loop_states()[event[0]]
         if event[1] == 'down': # Key down event
             if loop_states[loop] == 'Recording':
-                send_osc(loop, 'hit', 'record')
+                command = {True: 'undo', False: 'record'}[held(key_q)]
+                send_osc(loop, 'hit', command)
 
             else: #So, 'muted', or 'off'.
-                pressed = time.time() #Record current time
-                held = pressed + hold_time #Calculate when user will have held for designated hold time
-                while 1:
-                    delta = held - time.time() #Compute remaining hold time
-                    if delta < 0: #This should probably not go negative, so just in case
-                        delta = 0
-                    try:
-                        new_event = key_q.get(timeout=delta) #Wait to see if the user is holding
-                        if new_event[1] == 'up': #Got the key up message, so user released
-                            command = 'mute'
-                            break
-                    except: #We got no up message and queue raised empty error
-                        command = 'record'
-                        break
-
+                command = {True: 'mute', False: 'record'}[held(key_q)]
                 send_osc(loop, 'hit', command) #Actually trigger osc, now that we know what to do
 
 for i, q in enumerate(loop_queues):
