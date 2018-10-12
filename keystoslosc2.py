@@ -1,13 +1,14 @@
 #!/usr/bin/python
 
-import time, inspect, liblo
+import time, inspect, liblo, hid
 from operator import itemgetter
 from multiprocessing import Process, Queue
 from queue import Empty
 from evdev import InputDevice, categorize, ecodes as e
 
+debug = False
 hold_time = .35 #How long user has to press a button before it triggers hold actions
-loops = 6 #How many loops. 6 for now, but buttons are mapped for 9 or 10
+loops = 6 #How many loops. Dies if this doesn't match SL's current state, should query instead
 
 # Foot controller keyboard
 dev = InputDevice('/dev/input/by-id/usb-05a4_USB_Compliant_Keyboard-event-kbd')
@@ -17,6 +18,9 @@ dev = InputDevice('/dev/input/by-id/usb-05a4_USB_Compliant_Keyboard-event-kbd')
 
 # Any ol' event
 #dev = InputDevice('/dev/input/event0')
+
+while True:
+    print(h.read(8))
 
 dev.grab() # Capture input, so we're not typing
 
@@ -28,7 +32,8 @@ in_server.add_method(None, None, lambda p, a: osc_in_q.put((p, a)))
 
 def send_osc(*args):
     """Takes a loop, command, and argument (e.g. "up", "down", state) and sends appropriate osc message"""
-    print('Sending OSC message: {}'.format(args))
+    if debug:
+        print('Sending OSC message: {}'.format(args))
     liblo.send(9951, liblo.Message("/sl/{}/{}".format(*args[:2]), *args[2:]))
 
 # Map keyboard keys to loop numbers and commands. Probably should specify here both the press and hold actions for each of recording, mute, and off states. Or maybe just need recording and mute/off like we do below. Change that code to just send the specified command.
@@ -57,7 +62,7 @@ key_map = {'KEY_LEFTMETA': [0, *bottom_row_actions],
            'KEY_U': [2, *top_row_actions],
            'KEY_LEFTBRACE': [3, *top_row_actions],
            'KEY_SYSRQ': [4, *top_row_actions],
-           'KEY_KP8': [5, *top_row_actions]}
+           'KEY_KPASTERISK': [5, *top_row_actions]}
 
 # Map sl's integer codes to loop states
 state_codes = {-1: 'unknown',
@@ -89,7 +94,11 @@ def update_loop_states():
         send_osc(i, 'get', 'state', '127.0.0.1:9950', '/slreplies/')
         in_server.recv()
         reply = osc_in_q.get()
-        loop_states[i] = state_codes[int(reply[1][2])] #Get reply from looper, key into state codes
+        try:
+            loop_states[i] = state_codes[int(reply[1][2])] #Get reply from looper, key into state codes
+        except IndexError:
+            print("Couldn't key into loop states reply:")
+            print(reply)
     return loop_states
 
 update_loop_states() #Do this once, because we don't know what the initial states are
@@ -115,7 +124,7 @@ def master_catcher(key_q):
     """Receives keypresses sends messages as needed--for master loop"""
     while(1):
         event = key_q.get()
-        print("master catcher time")
+        # print("master catcher time")
         send_osc(*event)
 
 def catcher(key_q):
@@ -134,6 +143,7 @@ def catcher(key_q):
         if loop is None:
             pass # Placeholder for global commands
         else:
+            liblo.send(9951, "/set", "selected_loop_num", loop)
             if not was_held:
                 try:
                     send_osc(loop, 'hit', event[2][state])
@@ -163,6 +173,8 @@ for i, q in enumerate(loop_queues):
 for event in dev.read_loop():
     if event.type == e.EV_KEY:
         event = categorize(event)
+        if debug:
+            print(event)
         try:
             mapped = list(key_map[event.keycode])
 
@@ -172,8 +184,7 @@ for event in dev.read_loop():
             elif event.keystate == 0: # Key up event
                 mapped.insert(1, 'up')
                 loop_queues[mapped[0]].put(mapped)
-            print(mapped)
+            if debug:
+                print(mapped)
         except:
             pass
-
-    #print(categorize(event).keycode, (categorize(event).keystate))
