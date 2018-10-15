@@ -6,12 +6,12 @@ from multiprocessing import Process, Queue
 from queue import Empty
 from evdev import InputDevice, categorize, ecodes as e
 
-debug = False
+debug = True
 hold_time = .35 #How long user has to press a button before it triggers hold actions
 loops = 6 #How many loops. Dies if this doesn't match SL's current state, should query instead
 
 # Foot controller keyboard
-dev = InputDevice('/dev/input/by-id/usb-05a4_USB_Compliant_Keyboard-event-kbd')
+#dev = InputDevice('/dev/input/by-id/usb-05a4_USB_Compliant_Keyboard-event-kbd')
 
 # Desk keyboard
 #dev = InputDevice('/dev/input/by-path/pci-0000:00:14.0-usb-0:1.1:1.0-event-kbd')
@@ -19,10 +19,11 @@ dev = InputDevice('/dev/input/by-id/usb-05a4_USB_Compliant_Keyboard-event-kbd')
 # Any ol' event
 #dev = InputDevice('/dev/input/event0')
 
-while True:
-    print(h.read(8))
+# Infinity Transcription Footpedal
+infinity = hid.device()
+infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
 
-dev.grab() # Capture input, so we're not typing
+#dev.grab() # Capture input, so we're not typing
 
 in_server = liblo.Server(9950) #Define liblo server for replies from sooperlooper
 out_port = 9951 #Port that sl is listening on, for us to send messages to
@@ -63,6 +64,11 @@ key_map = {'KEY_LEFTMETA': [0, *bottom_row_actions],
            'KEY_LEFTBRACE': [3, *top_row_actions],
            'KEY_SYSRQ': [4, *top_row_actions],
            'KEY_KPASTERISK': [5, *top_row_actions]}
+
+# -3 for selected loop, -1 for all loops
+infinity_map = {(1, 0): [-3, 'undo', 'undo_all'],
+                (2, 0): [-3, 'record', 'overdub'],
+                (4, 0): [-3, 'mute', 'reverse']}
 
 # Map sl's integer codes to loop states
 state_codes = {-1: 'unknown',
@@ -120,12 +126,26 @@ def held(key_q):
             return True
 
 # No more "master loop", though we should be able to implement this under new framework, by giving an option to ignore held keys to eliminate latency waiting for key up event. Actually, since all commands are routed to loop queues, we'll need something like this for global commands, if we want to use them.
-def master_catcher(key_q):
-    """Receives keypresses sends messages as needed--for master loop"""
+def global_catcher(q):
+    """Receives presses sends messages for global and selected commands"""
     while(1):
-        event = key_q.get()
-        # print("master catcher time")
-        send_osc(*event)
+        event = q.get()
+        loop = event[0]
+        if event[1] == 'down':
+            was_held = held(q)
+        else:
+            continue
+
+        if not was_held:
+            try:
+                send_osc(loop, 'hit', event[2])
+            except KeyError:
+                pass
+        else:
+            try:
+                send_osc(loop, 'hit', event[3])
+            except KeyError:
+                pass
 
 def catcher(key_q):
     """Receives keypresses sends messages as needed"""
@@ -140,24 +160,21 @@ def catcher(key_q):
         else:
             continue
 
-        if loop is None:
-            pass # Placeholder for global commands
+        liblo.send(9951, "/set", "selected_loop_num", loop)
+        if not was_held:
+            try:
+                send_osc(loop, 'hit', event[2][state])
+            except TypeError: # Mapping has only single action
+                send_osc(loop, 'hit', event[2])
+            except KeyError:
+                pass
         else:
-            liblo.send(9951, "/set", "selected_loop_num", loop)
-            if not was_held:
-                try:
-                    send_osc(loop, 'hit', event[2][state])
-                except TypeError: # Mapping has only single action
-                    send_osc(loop, 'hit', event[2])
-                except KeyError:
-                    pass
-            else:
-                try:
-                    send_osc(loop, 'hit', event[3][state])
-                except TypeError: # Mapping has only single action
-                    send_osc(loop, 'hit', event[3])
-                except KeyError:
-                    pass
+            try:
+                send_osc(loop, 'hit', event[3][state])
+            except TypeError: # Mapping has only single action
+                send_osc(loop, 'hit', event[3])
+            except KeyError:
+                pass
 
 def statedump():
     while(1):
@@ -169,6 +186,26 @@ def statedump():
 for i, q in enumerate(loop_queues):
     p = Process(target=catcher, args=(q,))
     p.start()
+
+# TODO: Ok, so, we can't just block on the PC keyboard anymore, if we want the new transcription pedal to play along too. That means processes for each input device, as well as each loop, and probably one for the looper itself as well.
+# However, as I am considering it, the first step is just to get infinity working by itself. Just need to create maps for it
+
+global_q = Queue()
+p = Process(target=global_catcher, args=(global_q,))
+p.start()
+
+while 1:
+    press = infinity.read(8)
+    print(press)
+
+    if press[0] != 0: # Key down event
+        mapped = list(infinity_map[tuple(press)])
+        mapped.insert(1, 'down')
+        global_q.put(mapped)
+    else: # Key up event
+        global_q.put([1, 'up'])
+    if debug:
+        print(mapped)
 
 for event in dev.read_loop():
     if event.type == e.EV_KEY:
@@ -182,8 +219,8 @@ for event in dev.read_loop():
                 mapped.insert(1, 'down')
                 loop_queues[mapped[0]].put(mapped)
             elif event.keystate == 0: # Key up event
-                mapped.insert(1, 'up')
-                loop_queues[mapped[0]].put(mapped)
+                for q in loop_queues: # We don't get specific key up msgs, so send to all loops. Really, these
+                    q.put(['up'])
             if debug:
                 print(mapped)
         except:
