@@ -10,45 +10,12 @@ debug = True
 hold_time = .35 #How long user has to press a button before it triggers hold actions
 loops = 6 #How many loops. Dies if this doesn't match SL's current state, should query instead
 
-class Qwerty:
-    def __init__(self, path):
-        self.dev = InputDevice(path)
-
-    def loop(self):
-        for event in self.dev.read_loop():
-            if event.type == e.EV_KEY:
-                event = categorize(event)
-                if debug:
-                    print(event)
-
-                try:
-                    mapped = list(key_map[event.keycode])
-
-                    if event.keystate == 1: # Key down event
-                        mapped.insert(1, 'down')
-                        loop_queues[mapped[0]].put(mapped)
-                    elif event.keystate == 0: # Key up event
-                        for q in loop_queues: # We don't get specific key up msgs, so send to all loops. Really, these
-                            q.put(['up'])
-                    if debug:
-                        print(mapped)
-                except:
-                    pass
-
-# Foot controller keyboard
-#dev = InputDevice('/dev/input/by-id/usb-05a4_USB_Compliant_Keyboard-event-kbd')
-
-# Desk keyboard
-#dev = InputDevice('/dev/input/by-path/pci-0000:00:14.0-usb-0:1.1:1.0-event-kbd')
-
-# Any ol' event
-#dev = InputDevice('/dev/input/event0')
-
 # Infinity Transcription Footpedal
-infinity = hid.device()
-infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
-
-#dev.grab() # Capture input, so we're not typing
+try:
+    infinity = hid.device()
+    infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
+except OSError:
+    print("Couldn't open Infinity")
 
 in_server = liblo.Server(9950) #Define liblo server for replies from sooperlooper
 out_port = 9951 #Port that sl is listening on, for us to send messages to
