@@ -6,11 +6,12 @@ from evdev import InputDevice, categorize, ecodes as e
 
 class Button:
     def __init__(self, hold_time=0, double_time=0, simultaneous=False,
-                 name=None):
+                 name=None, number =None):
         self.hold_time = hold_time
         self.double_time = double_time
         self.simultaneous = simultaneous
         self.name = name
+        self.number = number
 
         self.pressed = False
         self.held = False
@@ -85,50 +86,47 @@ class Button:
             self.pressed_simultaneous = True
 
     def press_action(self):
-        print('press')
+        print('Pressed: ' + str(self))
 
     def hold_action(self):
-        print('hold')
+        print('Held: ' + str(self))
 
     def double_action(self):
-        print('double')
+        print('Double pressed: ' + str(self))
 
     def simultaneous_action(self, button):
-        print('simultaneous with: ' + str(button))
+        print('Simultaneous: {} and {}'.format(self, button))
 
 class Qwerty:
     """
     See here for code to make lights blink: https://stackoverflow.com/questions/854393/change-keyboard-locks-in-python/858992#858992
     """
-    def __init__(self, path, key_map, grab=True):
+    def __init__(self, path, key_map, grab=False, verbose=False):
         self.dev = InputDevice(path)
         self.key_map = key_map
+        self.grab = grab
+        self.verbose = verbose
         self.buttons = {key: Button(name=key) for key in key_map}
 
         if self.grab:
-            dev.grab() #This requires user in input group or run as root
+            self.dev.grab() #This requires user in input group or run as root
 
     def loop(self):
         for event in self.dev.read_loop():
             if event.type == e.EV_KEY:
                 event = categorize(event)
-                if debug:
+                if self.verbose:
                     print(event)
 
-                try:
-                    mapped = list(self.key_map[event.keycode])
-
+                if event.keycode in self.key_map:
                     if event.keystate == 1: # Key down event
+                        print('pressing button: ' + event.keycode)
                         self.buttons[event.keycode].press()
 
                     elif event.keystate == 0: # Key up event, not key specific
-                        for b in self.buttons:
+                        for b in dict.values(self.buttons):
                             if b.pressed:
                                 b.release()
-                    if debug:
-                        print(mapped)
-                except:
-                    pass
 
 # Foot controller keyboard
 #dev = InputDevice('/dev/input/by-id/usb-05a4_USB_Compliant_Keyboard-event-kbd')
@@ -145,15 +143,44 @@ path = '/dev/input/by-path/platform-i8042-serio-0-event-kbd'
 #dev.grab() # Capture input, so we're not typing
 
 # Infinity Transcription Footpedal
-try:
-    infinity = hid.device()
-    infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
-except OSError:
-    print("Couldn't open Infinity")
 
-b = Button(2,2)
+class Infinity:
+    button_map = {1: 'Left', 2: 'Center', 4:'Right'}
 
-b.press()
-b.release()
-b.press()
-b.release()
+    def __init__(self):
+        try:
+            self.dev = hid.device()
+            self.dev.open(0x05f3, 0x00ff) # VendorId/ProductId
+        except OSError:
+            print("Couldn't open Infinity")
+
+        self.buttons = {name: Button(.45, .25, True, name, number)
+                        for number, name in self.button_map.items()}
+
+    def loop(self):
+        while 1:
+            press = self.dev.read(8)[0]
+
+            if press == 0:
+                for button in self.buttons.values():
+                    if button.pressed:
+                        button.release()
+
+            elif press in [1, 2, 4]:
+                name = self.button_map[press]
+                self.buttons[name].press()
+
+            else:
+                for button in self.buttons.values():
+                    if button.pressed and button.simultaneous:
+                        new_button = self.button_map(press - button.number)
+                        button.simultaneous_press(new_button)
+
+
+if __name__ == '__main__':
+    b = Button(2,2)
+
+    b.press()
+    b.release()
+    b.press()
+    b.release()

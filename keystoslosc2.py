@@ -1,21 +1,20 @@
 #!/usr/bin/python
 
-import time, inspect, liblo, hid
+import time, inspect, liblo, hid, rtmidi
 from operator import itemgetter
 from multiprocessing import Process, Queue
 from queue import Empty
 from evdev import InputDevice, categorize, ecodes as e
+from itertools import chain
+from dooper import Looper
 
-debug = True
+debug = False
 hold_time = .35 #How long user has to press a button before it triggers hold actions
-loops = 6 #How many loops. Dies if this doesn't match SL's current state, should query instead
 
-# Infinity Transcription Footpedal
-try:
-    infinity = hid.device()
-    infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
-except OSError:
-    print("Couldn't open Infinity")
+# looper = Looper()
+# loops = len(looper.loops) #How many loops. Dies if this doesn't match SL's current state, should query instead
+loops = 6
+
 
 in_server = liblo.Server(9950) #Define liblo server for replies from sooperlooper
 out_port = 9951 #Port that sl is listening on, for us to send messages to
@@ -61,6 +60,12 @@ key_map = {'KEY_LEFTMETA': [0, *bottom_row_actions],
 infinity_map = {(1, 0): [-3, 'undo', 'undo_all'],
                 (2, 0): [-3, 'record', 'overdub'],
                 (4, 0): [-3, 'mute', 'reverse']}
+
+midi_map_inverse = dict(zip(range(0,8), chain(range(36,40), range(44,48))))
+midi_map = dict(zip(chain(range(36,40), range(44,48)), range(0,8)))
+
+midi_map_top_inverse = dict(zip(range(0,8), chain(range(40,44), range(48,52))))
+midi_map_top = dict(zip(chain(range(40,44), range(48,52)), range(0,8)))
 
 # Map sl's integer codes to loop states
 state_codes = {-1: 'unknown',
@@ -139,8 +144,48 @@ def global_catcher(q):
             except KeyError:
                 pass
 
+        update_loop_states()
+
+        # if event[2] == 'mute' or event[3] == 'mute':
+        #     try:
+        #         lit.remove(midi_map[loop])
+        #     except ValueError:
+        #         pass
+
+def infinity_catcher(q):
+    """Receive input from infinity foot controller and place commands into queue"""
+    # Infinity Transcription Footpedal
+    try:
+        infinity = hid.device()
+        infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
+    except OSError:
+        print("Couldn't open Infinity")
+        return
+
+    # Clear any messages waiting in queue
+    while infinity.read(8,1):
+        pass
+
+    while(1):
+        press = infinity.read(8)
+        if debug:
+            print(press)
+
+        if press[0] != 0: # Key down event
+            try:
+                mapped = list(infinity_map[tuple(press)])
+            except KeyError:
+                continue
+            mapped.insert(1, 'down')
+            q.put(mapped)
+        else:
+            # Key up event, loop number not used here
+            q.put([1, 'up'])
+        if debug:
+            print(mapped)
+
 def catcher(key_q):
-    """Receives keypresses sends messages as needed"""
+    """Receives button presses and sends messages as needed"""
     while(1):
         event = key_q.get()
         loop = event[0]
@@ -180,21 +225,92 @@ for i, q in enumerate(loop_queues):
     p.start()
 
 # TODO: Ok, so, we can't just block on the PC keyboard anymore, if we want the new transcription pedal to play along too. That means processes for each input device, as well as each loop, and probably one for the looper itself as well.
-# However, as I am considering it, the first step is just to get infinity working by itself. Just need to create maps for it
 
 global_q = Queue()
-p = Process(target=global_catcher, args=(global_q,))
-p.start()
+p1 = Process(target=infinity_catcher, args=(global_q,))
+p2 = Process(target=global_catcher, args=(global_q,))
+p1.start()
+p2.start()
+#p.join()
 
-while 1:
-    press = infinity.read(8)
-    print(press)
+#infinity_catcher(global_q, infinity)
 
-    if press[0] != 0: # Key down event
-        mapped = list(infinity_map[tuple(press)])
-        mapped.insert(1, 'down')
-        global_q.put(mapped)
-    else: # Key up event
-        global_q.put([1, 'up'])
+midin = rtmidi.RtMidiIn()
+midiout_lpd = rtmidi.RtMidiOut()
+midiout_tap = rtmidi.RtMidiOut()
+midin.openVirtualPort("rtmidi")
+midiout_lpd.openVirtualPort("rtmidi")
+midiout_tap.openVirtualPort("rtmidi-tap")
+
+toprow = list(chain(range(40, 44), range(48, 52), range(56, 58), range(62, 66)))
+bottomrow = list(chain(range(36, 40), range(44, 48), range(52, 56), range(58, 62)))
+lit = []
+
+def light():
+    for l in lit:
+        midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, l, 127))
+
+    for i, state in enumerate(loop_states):
+        if state in ("Muted", "Off and muted"):
+            midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 127))
+
+        else:
+            midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 0))
+
+def cb(msg):
     if debug:
-        print(mapped)
+        print(msg)
+
+    if msg.isController():
+        number = msg.getControllerNumber()
+        value = msg.getControllerValue()
+
+        if number in toprow:
+            for i in toprow:
+                midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, i, 0))
+                try:
+                    lit.remove(i)
+                except ValueError:
+                    pass
+
+            lit.append(number)
+            if debug:
+                print(lit)
+
+            liblo.send(9951, liblo.Message("/set", "selected_loop_num", midi_map_top[number]))
+
+            time.sleep(.01)
+
+            update_loop_states()
+            light()
+
+        elif number in bottomrow and value:
+            send_osc(midi_map[number], 'hit', 'mute')
+
+            time.sleep(.01)
+
+            update_loop_states()
+            light()
+
+        # elif number in bottomrow and value:
+        #     try:
+        #         lit.remove(number)
+        #     except ValueError:
+        #         lit.append(number)
+        #
+        #     light()
+
+midin.setCallback(cb)
+
+try:
+    while 1:
+        if time.time() % .5 < .5:
+            update_loop_states()
+        light()
+        time.sleep(.05)
+
+except KeyboardInterrupt:
+    # Need to kill catcher processes so we can exit cleanly
+    # If these were threads, we could set them as daemons for same effect
+    p1.terminate()
+    p2.terminate()
