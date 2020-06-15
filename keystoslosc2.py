@@ -7,8 +7,10 @@ from queue import Empty
 from evdev import InputDevice, categorize, ecodes as e
 from itertools import chain
 from dooper import Looper
+from pressed import Infinity
 
 debug = False
+#debug = True
 hold_time = .35 #How long user has to press a button before it triggers hold actions
 
 # looper = Looper()
@@ -96,13 +98,24 @@ def update_loop_states():
     for i in range(len(loop_states)):
         send_osc(i, 'get', 'state', '127.0.0.1:9950', '/slreplies/')
         in_server.recv()
-        reply = osc_in_q.get()
         try:
+            reply = osc_in_q.get(timeout=.1)
             loop_states[i] = state_codes[int(reply[1][2])] #Get reply from looper, key into state codes
+        except Empty:
+            print("No reply from SooperLooper")
         except IndexError:
             print("Couldn't key into loop states reply:")
             print(reply)
+        except KeyError as e:
+            print(e)
     return loop_states
+
+# Traceback (most recent call last):
+#   File "./keystoslosc2.py", line 369, in <module>
+#     update_loop_states()
+#   File "./keystoslosc2.py", line 102, in update_loop_states
+#     loop_states[i] = state_codes[int(reply[1][2])] #Get reply from looper, key into state codes
+# KeyError: 15
 
 update_loop_states() #Do this once, because we don't know what the initial states are
 
@@ -152,15 +165,73 @@ def global_catcher(q):
         #     except ValueError:
         #         pass
 
+taps = 0
+
 def infinity_catcher(q):
     """Receive input from infinity foot controller and place commands into queue"""
     # Infinity Transcription Footpedal
-    try:
-        infinity = hid.device()
-        infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
-    except OSError:
-        print("Couldn't open Infinity")
-        return
+    # try:
+    #     infinity = hid.device()
+    #     infinity.open(0x05f3, 0x00ff) # VendorId/ProductId
+    # except OSError:
+    #     print("Couldn't open Infinity")
+    #     return
+
+    infinity = Infinity()
+    midiout_tap = rtmidi.MidiOut(name="tap")
+    midiout_tap.open_virtual_port("tap")
+
+    def record(button):
+        send_osc(-3, 'hit', 'record')
+
+    def overdub(button):
+        send_osc(-3, 'hit', 'overdub')
+
+    def undo(button):
+        send_osc(-3, 'hit', 'undo')
+
+    def undo_all(button):
+        send_osc(-3, 'hit', 'undo_all')
+
+    def tap_tempo(button):
+        button.midiout_tap.send_message([0x90, 59, 127])
+            #rtmidi.MidiMessage.noteOn(1, 59, 127))
+
+        if button.taps == 3:
+            button.midiout_tap.send_message([0x90, 56, 127])
+                #rtmidi.MidiMessage.noteOn(1, 56, 127))
+
+        button.taps += 1
+        button.taps %= 4
+
+    def play_pause(button):
+        button.midiout_tap.send_message([0x90, 69, 127])
+            #rtmidi.MidiMessage.noteOn(1, 69, 127))
+
+
+    infinity.buttons['left'].press_action = undo
+    infinity.buttons['left'].hold_action = undo_all
+
+    infinity.buttons['center'].press_action = record
+    infinity.buttons['center'].hold_action = overdub
+
+    infinity.buttons['right'].midiout_tap = midiout_tap
+    infinity.buttons['right'].taps = 0
+    infinity.buttons['right'].press_action = tap_tempo
+    infinity.buttons['right'].hold_action = play_pause
+
+    while(1):
+        press = infinity.dev.read(8)[0]
+
+        if press == 0:
+            for button in infinity.buttons.values():
+                if button.pressed:
+                    button.release()
+
+        elif press in [1, 2, 4]:
+            name = infinity.button_map[press]
+            infinity.buttons[name].press()
+
 
     # Clear any messages waiting in queue
     while infinity.read(8,1):
@@ -235,12 +306,10 @@ p2.start()
 
 #infinity_catcher(global_q, infinity)
 
-midin = rtmidi.RtMidiIn()
-midiout_lpd = rtmidi.RtMidiOut()
-midiout_tap = rtmidi.RtMidiOut()
-midin.openVirtualPort("rtmidi")
-midiout_lpd.openVirtualPort("rtmidi")
-midiout_tap.openVirtualPort("rtmidi-tap")
+midin = rtmidi.MidiIn(name="dooper")
+midiout_lpd = rtmidi.MidiOut(name="dooper")
+midin.open_virtual_port("dooper")
+midiout_lpd.open_virtual_port("dooper")
 
 toprow = list(chain(range(40, 44), range(48, 52), range(56, 58), range(62, 66)))
 bottomrow = list(chain(range(36, 40), range(44, 48), range(52, 56), range(58, 62)))
@@ -248,26 +317,33 @@ lit = []
 
 def light():
     for l in lit:
-        midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, l, 127))
+        midiout_lpd.send_message([0xb0, l, 127])
+                #rtmidi.MidiMessage.controllerEvent(1, l, 127))
 
     for i, state in enumerate(loop_states):
         if state in ("Muted", "Off and muted"):
-            midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 127))
+            midiout_lpd.send_message([0xb0, midi_map_inverse[i], 127])
+                    #rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 127))
 
         else:
-            midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 0))
+            midiout_lpd.send_message([0xb0, midi_map_inverse[i], 127])
+                    #rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 0))
 
 def cb(msg):
     if debug:
         print(msg)
 
-    if msg.isController():
-        number = msg.getControllerNumber()
-        value = msg.getControllerValue()
+    if msg[0][0] >> 4 == 0b1011:
+    #msg.isController():
+        #number = msg.getControllerNumber()
+        #value = msg.getControllerValue()
+        number = msg[0][1]
+        value = msg[0][2]
 
         if number in toprow:
             for i in toprow:
-                midiout_lpd.sendMessage(rtmidi.MidiMessage.controllerEvent(1, i, 0))
+                midiout_lpd.send_message([0xb0, i, 0])
+                        #rtmidi.MidiMessage.controllerEvent(1, i, 0))
                 try:
                     lit.remove(i)
                 except ValueError:
@@ -300,8 +376,10 @@ def cb(msg):
         #
         #     light()
 
-midin.setCallback(cb)
+midin.set_callback(cb)
 
+# Update to reflect changes made in other front ends.
+# This breaks on SL reboot and hangs a thread
 try:
     while 1:
         if time.time() % .5 < .5:
@@ -310,6 +388,15 @@ try:
         time.sleep(.05)
 
 except KeyboardInterrupt:
+    # Need to kill catcher processes so we can exit cleanly
+    # If these were threads, we could set them as daemons for same effect
+    p1.terminate()
+    p2.terminate()
+
+except Exception as e:
+    print(e)
+
+finally:
     # Need to kill catcher processes so we can exit cleanly
     # If these were threads, we could set them as daemons for same effect
     p1.terminate()

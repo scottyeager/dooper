@@ -32,15 +32,15 @@ class Button:
             return
 
         if not (self.hold_time or self.double_time or self.simultaneous):
-            self.press_action()
+            self.press_action(self)
 
         elif self.double_time and self.double_timer.is_alive():
             self.double_timer.cancel()
             self.pressed_double = True
-            self.double_action()
+            self.double_action(self)
 
         elif self.hold_time and not self.pressed_double:
-            print('starting hold timer')
+            # print('starting hold timer')
             self.hold_timer = Timer(self.hold_time, self.hold)
             self.hold_timer.start()
 
@@ -59,14 +59,14 @@ class Button:
         starting_double = self.double_time and not self.pressed_double
 
         if self.hold_time and not self.held:
-            print('canceling hold timer')
+            # print('canceling hold timer')
             self.hold_timer.cancel()
 
             if not (starting_double or self.pressed_double):
-                self.press_action()
+                self.press_action(self)
 
         if self.double_time and not (self.held or self.pressed_double or self.pressed_simultaneous):
-            print('starting double timer')
+            # print('starting double timer')
             self.double_timer = Timer(self.double_time, self.press_action)
             self.double_timer.start()
 
@@ -77,24 +77,24 @@ class Button:
 
     def hold(self):
         self.held = True
-        self.hold_action()
+        self.hold_action(self)
 
     def press_simultaneous(self, button):
         if self.hold_timer.is_alive():
             self.hold_timer.cancel()
-            self.simultaneous_action(button)
+            self.simultaneous_action(self, button)
             self.pressed_simultaneous = True
 
-    def press_action(self):
+    def press_action(self, self2):
         print('Pressed: ' + str(self))
 
-    def hold_action(self):
+    def hold_action(self, self2):
         print('Held: ' + str(self))
 
-    def double_action(self):
+    def double_action(self, self2):
         print('Double pressed: ' + str(self))
 
-    def simultaneous_action(self, button):
+    def simultaneous_action(self, self2, button):
         print('Simultaneous: {} and {}'.format(self, button))
 
 class Qwerty:
@@ -145,16 +145,21 @@ path = '/dev/input/by-path/platform-i8042-serio-0-event-kbd'
 # Infinity Transcription Footpedal
 
 class Infinity:
-    button_map = {1: 'Left', 2: 'Center', 4:'Right'}
+    button_map = {1: 'left', 2: 'center', 4:'right'}
 
-    def __init__(self):
+    def __init__(self, hold=.45, double=0): #.25 works for double
         try:
             self.dev = hid.device()
             self.dev.open(0x05f3, 0x00ff) # VendorId/ProductId
+
+            # Clear any input waiting in queue
+            while self.dev.read(8,1):
+                pass
+
         except OSError:
             print("Couldn't open Infinity")
 
-        self.buttons = {name: Button(.45, .25, True, name, number)
+        self.buttons = {name: Button(hold, double, True, name, number)
                         for number, name in self.button_map.items()}
 
     def loop(self):
