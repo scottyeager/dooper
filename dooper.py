@@ -94,8 +94,16 @@ class Looper:
             message += '/' + str(path2)
         self.send_osc(message, *args)
 
-    def receive(self, timeout=0):
+    def receive(self, timeout=1):
+        #Timeout of 0 is too small to reliably receive replies, and there's no way to recover from blocking in the main thread, at least in this case
         return self.server.recv(timeout)
+
+    def register_updates(self):
+        # Int is update interval, currently ignored and set to 100ms
+        # We have to auto update to get state info but it only sends with change
+        # Don't forget to receive messages
+        for n in len(self.loops):
+            self.send_osc('/sl/' + str(loop.number) + '/register_auto_update', 'state', 100, l.server.url, '/sl/loop')
 
     def ping(self, timeout=1):
         self.send_osc('/ping', self.server.url, '/sl/ping')

@@ -326,10 +326,10 @@ def light():
                     #rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 127))
 
         else:
-            midiout_lpd.send_message([0xb0, midi_map_inverse[i], 127])
+            midiout_lpd.send_message([0xb0, midi_map_inverse[i], 0])
                     #rtmidi.MidiMessage.controllerEvent(1, midi_map_inverse[i], 0))
 
-def cb(msg):
+def cb(msg, etc):
     if debug:
         print(msg)
 
@@ -380,6 +380,7 @@ midin.set_callback(cb)
 
 # Update to reflect changes made in other front ends.
 # This breaks on SL reboot and hangs a thread
+# Should register for updates from SL instead
 try:
     while 1:
         if time.time() % .5 < .5:
