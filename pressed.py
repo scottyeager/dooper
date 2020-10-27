@@ -148,23 +148,38 @@ class Infinity:
     button_map = {1: 'left', 2: 'center', 4:'right'}
 
     def __init__(self, hold=.45, double=0): #.25 works for double
-        try:
-            self.dev = hid.device()
-            self.dev.open(0x05f3, 0x00ff) # VendorId/ProductId
-
-            # Clear any input waiting in queue
-            while self.dev.read(8,1):
-                pass
-
-        except OSError:
-            print("Couldn't open Infinity")
+        self.open()
 
         self.buttons = {name: Button(hold, double, True, name, number)
                         for number, name in self.button_map.items()}
 
+    def open(self):
+        while(1):
+            try:
+                self.dev = hid.device()
+                self.dev.open(0x05f3, 0x00ff) # VendorId/ProductId
+
+                print("Connected to Infinity")
+
+                # Clear any input waiting in queue
+                while self.dev.read(8,1):
+                    pass
+
+                break
+
+            except OSError:
+                print("Couldn't open Infinity, trying again")
+                time.sleep(1)
+
+
     def loop(self):
         while 1:
-            press = self.dev.read(8)[0]
+            try:
+                press = self.dev.read(8)[0]
+            except OSError:
+                print("Lost connection to Infinity, trying to open again")
+                self.open()
+                continue
 
             if press == 0:
                 for button in self.buttons.values():

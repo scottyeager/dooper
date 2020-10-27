@@ -220,40 +220,8 @@ def infinity_catcher(q):
     infinity.buttons['right'].press_action = tap_tempo
     infinity.buttons['right'].hold_action = play_pause
 
-    while(1):
-        press = infinity.dev.read(8)[0]
+    infinity.loop()
 
-        if press == 0:
-            for button in infinity.buttons.values():
-                if button.pressed:
-                    button.release()
-
-        elif press in [1, 2, 4]:
-            name = infinity.button_map[press]
-            infinity.buttons[name].press()
-
-
-    # Clear any messages waiting in queue
-    while infinity.read(8,1):
-        pass
-
-    while(1):
-        press = infinity.read(8)
-        if debug:
-            print(press)
-
-        if press[0] != 0: # Key down event
-            try:
-                mapped = list(infinity_map[tuple(press)])
-            except KeyError:
-                continue
-            mapped.insert(1, 'down')
-            q.put(mapped)
-        else:
-            # Key up event, loop number not used here
-            q.put([1, 'up'])
-        if debug:
-            print(mapped)
 
 def catcher(key_q):
     """Receives button presses and sends messages as needed"""
