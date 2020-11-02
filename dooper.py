@@ -176,6 +176,17 @@ class LooperThread:
     def __repr__(self):
         return 'LooperThread(port={}, sl_port={}, verbose={})'.format(self.port, self.sl_port, self.verbose)
 
+
+    def __setattr__(self, name, val):
+        if name in ['sync_source', 'quantize', 'selected_loop_num']:
+            super().__setattr__(name, val)
+
+        elif name in looper_parameters:
+            self.set(name, val)
+
+        else:
+            self.__dict__[name] = val
+
     def start_server(self):
 
             self.server.add_method('/sl/ping', None, self.ping_responder)
@@ -190,9 +201,6 @@ class LooperThread:
         if not self.ping():
             print("No ping reply from SooperLooper")
             return
-
-#        for param in self.params:
-#            self.send_osc('/get', param, self.server.url, '/sl/looper')
 
         for param in looper_parameters:
             self.send_osc('/get', param, self.server.url, '/sl/looper')
@@ -267,27 +275,6 @@ class LooperThread:
         self.send_osc('/ping', self.server.url, '/sl/ping')
         return self.ping_flag.wait(timeout)
 
-    def __setattr__(self, name, val):
-        if name in ['sync_source', 'quantize', 'selected_loop_num']:
-            super().__setattr__(name, val)
-        # if name == 'sync_source':
-        #     if isinstance(val, str):
-        #         s = - ('none', 'jack', 'midi', 'internal').index(val)
-        #     else:
-        #         s = val
-        #     self.set('sync_source', s)
-        # elif name == 'quantize':
-        #     q = ('off', 'cycle', '8th', 'loop').index(val)
-        #     self.send_osc('/sl/0/set', 'quantize', q)
-        elif name in looper_parameters:
-            self.set(name, val)
-        else:
-            self.__dict__[name] = val
-            #print("Can't set '{}'. Sorry :(".format(name))
-
-#    -3 = internal, -2 = midi, -1 = jack, 0 = none, # > 0 = loop number (1 indexed)
-
-
     @property
     def quantize(self):
         return ('off', 'cycle', '8th', 'loop')[int(self.__dict__['quantize'])]
@@ -303,7 +290,7 @@ class LooperThread:
         if s == -1:
             return 'all'
         else:
-            return s
+            return int(s)
 
     @selected_loop_num.setter
     def selected_loop_num(self, val):
