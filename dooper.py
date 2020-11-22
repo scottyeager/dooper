@@ -1,5 +1,7 @@
 """
-A library for interfacing with SooperLooper.
+A Python library for interfacing with SooperLooper.
+
+Tracks full state and provides interface to all loop commands. Almost a complete client, just missing changing loop count, saving sessions, and modifying midi bindings.
 """
 
 import liblo
@@ -43,7 +45,7 @@ loop_parameters_gettable = (
     'state',   # codes mapped below
     'next_state',  # same as state
     'loop_len',  # in seconds
-    'loop_pos',  # in seconds
+#    'loop_pos',  # in seconds
     'cycle_len', # in seconds
     'free_time', # in seconds
     'total_time', # in seconds
@@ -118,45 +120,16 @@ state_codes = {-1: 'unknown',
                14: 'Paused',
                20: 'Off and muted'} #20 isn't documented...
 
-# state_codes = (
-#     'Off',
-#     'WaitStart', # Waiting to start recording
-#     'Recording',
-#     'WaitStop', # Waiting to stop recording
-#     'Playing', # Or maybe waiting to mute
-#     'Overdubbing',
-#     'Multiplying',
-#     'Inserting',
-#     'Replacing',
-#     'Delay',
-#     'Muted', # Or maybe waiting to play
-#     'Scratching',
-#     'OneShot',
-#     'Substitute',
-#     'Paused',
-#     None,
-#     None,
-#     None,
-#     None,
-#     None,
-#     'Off and muted' # 20 isn't documented...
-#     'unknown' # Actually -1
-#     )
-
 
 class LooperThread:
     """
     Handles I/O with SooperLooper via OSC. Organizes loops.
 
+    Uses a threaded liblo server to register for updates and automatically track looper and loop state.
+
     See documentation here: http://essej.net/sooperlooper/doc_osc.html
 
-     /ping s:return_url s:return_path
-
-     If engine is there, it will respond with to the given URL and PATH
-      with an OSC message with arguments:
-         s:hosturl  s:version  i:loopcount
-
-     """
+    """
 
     def __init__(self, port=9950, sl_port=9951, verbose=False):
         self.port = port
@@ -167,11 +140,14 @@ class LooperThread:
 
         self.ping_flag = Event()
 
-        self.params = {'tempo': 0, 'eighth_per_cycle': 0, 'selected_loop_num': 0}
         self.loop_count = 0
         self.loops = []
 
-        self.start_server()
+        self.loop_callbacks = []
+        self.looper_callbacks = []
+        self.ping_callbacks = []
+
+        #self.start_server()
 
     def __repr__(self):
         return 'LooperThread(port={}, sl_port={}, verbose={})'.format(self.port, self.sl_port, self.verbose)
@@ -225,10 +201,14 @@ class LooperThread:
         liblo.send(self.sl_port, liblo.Message(path, *args))
 
     def ping_responder(self, path, args):
-        self.loop_count = args[2]
-        self.ping_flag.set()
         if self.verbose:
             print('Received OSC message: {} {}'.format(path, args))
+
+        self.loop_count = args[2]
+        self.ping_flag.set()
+
+        for f in self.ping_callbacks:
+            f(args)
 
     def loop_responder(self, path, args):
         """ Listens for replies from SL about loops, then updates loop object accordingly."""
@@ -241,13 +221,18 @@ class LooperThread:
 
         loop.__dict__[control] = value
 
+        for f in self.loop_callbacks:
+            f(args)
+
     def looper_responder(self, path, args):
         """ Listens for replies from SL about looper global state"""
         if self.verbose:
             print('Received OSC message: {} {}'.format(path, args))
 
-        self.params[args[1]] = args[2]
         self.__dict__[args[1]] = args[2]
+
+        for f in self.looper_callbacks:
+            f(args)
 
     def send(self, path1, path2, *args):
         message = '/sl/' + str(path1)
@@ -275,6 +260,9 @@ class LooperThread:
         self.send_osc('/ping', self.server.url, '/sl/ping')
         return self.ping_flag.wait(timeout)
 
+    def select_loop(self, n):
+        self.selected_loop_num = n
+
     @property
     def quantize(self):
         return ('off', 'cycle', '8th', 'loop')[int(self.__dict__['quantize'])]
@@ -286,19 +274,25 @@ class LooperThread:
 
     @property
     def selected_loop_num(self):
-        s = self.__dict__['selected_loop_num']
-        if s == -1:
+        n = self.__dict__['selected_loop_num']
+        if n == -1:
             return 'all'
         else:
-            return int(s)
+            return int(n)
 
     @selected_loop_num.setter
     def selected_loop_num(self, val):
         if val == 'all':
-            s = -1
+            n = -1
         else:
-            s = val
-        self.set('selected_loop_num', s)
+            n = val
+        self.set('selected_loop_num', n)
+
+    @property
+    def selected_loop(self):
+        n = self.selected_loop_num
+        if isinstance(n, int):
+            return self.loops[n]
 
     @property
     def sync_source(self):
@@ -358,26 +352,21 @@ class Loop:
     def state(self):
         return state_codes[int(self.__dict__['state'])]
 
+    @property
+    def next_state(self):
+        return state_codes[int(self.__dict__['next_state'])]
+
 
 class Looper:
     """
-    Handles I/O with SooperLooper via OSC. Organizes loops.
+    The original, unthreaded looper class. It's missing features that have been added to the threaded version and will likely be merged to a single class with both options at some point.
 
-    See documentation here: http://essej.net/sooperlooper/doc_osc.html
-
-     /ping s:return_url s:return_path
-
-     If engine is there, it will respond with to the given URL and PATH
-      with an OSC message with arguments:
-         s:hosturl  s:version  i:loopcount
-
-     """
+    """
 
     def __init__(self, port=9950, sl_port=9951, verbose=False):
         self.port = port
         self.sl_port = sl_port
         self.verbose = verbose
-
 
     def __repr__(self):
         return 'Looper(port={}, sl_port={}, verbose={})'.format(self.port, self.sl_port, self.verbose)
